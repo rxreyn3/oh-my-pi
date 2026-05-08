@@ -898,10 +898,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		return { ttsrManager, rulebookRules, alwaysApplyRules };
 	});
 
+	// Cap the parent's wait on workspace-scan promises so a pathological repo can't hang startup.
+	// On timeout we fall through with `undefined`; ToolSession only uses these to forward to subagents
+	// (they rebuild with their own deadline), and `buildSystemPrompt` still gets the live promises
+	// below and runs its own withDeadline race.
+	const PARENT_PREP_DEADLINE_MS = 5_000;
+	const withSoftDeadline = <T>(work: Promise<T>, ms: number): Promise<T | undefined> =>
+		Promise.race([
+			work.catch(() => undefined),
+			Bun.sleep(ms).then(() => undefined),
+		]);
 	const [contextFiles, resolvedAgentsMdSearch, resolvedWorkspaceTree] = await Promise.all([
 		contextFilesPromise,
-		agentsMdSearchPromise,
-		workspaceTreePromise,
+		withSoftDeadline(agentsMdSearchPromise, PARENT_PREP_DEADLINE_MS),
+		withSoftDeadline(workspaceTreePromise, PARENT_PREP_DEADLINE_MS),
 	]);
 
 	let agent: Agent;
